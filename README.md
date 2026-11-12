@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # RAG-Based Document Q&A System
 
 **Python · LangChain · Qdrant · Hugging Face Transformers · BM25 · Cross-Encoder Reranking**
@@ -348,3 +349,6 @@ For fair comparisons, change one setting at a time, use the same evaluation ques
 - [LangChain BM25Retriever reference](https://reference.langchain.com/python/langchain-community/retrievers/bm25/BM25Retriever)
 - [Sentence Transformers Cross-Encoder usage](https://www.sbert.net/docs/cross_encoder/usage/usage.html)
 - [Qdrant local mode](https://qdrant.tech/documentation/quick-start/)
+=======
+# AI-RAG-Based-Document-Q-A-System
+>>>>>>> 5da791b0eac7880d721780d6f68ab94a0ee8c44a

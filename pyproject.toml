@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "document-rag-qa"
+version = "1.0.0"
+description = "Local, citation-grounded document Q&A with LangChain, Qdrant, BM25, and transformer reranking."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "MIT" }
+authors = [{ name = "Prathamesh Chintawar" }]
+dependencies = [
+  "langchain>=1.0,<2",
+  "langchain-community>=0.4,<0.5",
+  "langchain-core>=1.0,<2",
+  "langchain-text-splitters>=1.0,<2",
+  "langchain-qdrant>=1.1,<2",
+  "langchain-huggingface>=1.2,<2",
+  "qdrant-client>=1.16,<2",
+  "sentence-transformers>=5.2,<6",
+  "transformers>=5.0,<6",
+  "torch>=2.6,<3",
+  "rank_bm25>=0.2.2,<1",
+  "pymupdf>=1.26,<2",
+  "python-docx>=1.2,<2",
+  "beautifulsoup4>=4.13,<5",
+  "streamlit>=1.50,<2",
+  "requests>=2.32,<3",
+  "python-dotenv>=1.1,<2",
+  "numpy>=2.0,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.14,<1"]
+
+[project.scripts]
+doc-rag = "rag_app.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["rag_app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501"]

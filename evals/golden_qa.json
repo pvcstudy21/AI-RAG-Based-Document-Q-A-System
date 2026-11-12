@@ -1,0 +1,59 @@
+{
+  "description": "Small, manually labelled evaluation set for examples/sample_book.md. Relevant chunks are identified by text fragments that must exist in the indexed chunk catalog.",
+  "cases": [
+    {
+      "question": "What information should a document parser preserve during ingestion?",
+      "source": "sample_book.md",
+      "relevant_text_contains": ["Document ingestion begins with loading and parsing"],
+      "expected_answer_terms": ["page number", "source filename", "section"]
+    },
+    {
+      "question": "What chunking strategy is recommended as a general-purpose default for prose?",
+      "source": "sample_book.md",
+      "relevant_text_contains": ["Recursive Character Text Splitter"],
+      "expected_answer_terms": ["paragraph", "sentence", "overlap"]
+    },
+    {
+      "question": "What does cosine similarity measure in dense retrieval?",
+      "source": "sample_book.md",
+      "relevant_text_contains": ["Cosine similarity measures the angle between two vectors"],
+      "expected_answer_terms": ["angle", "vectors"]
+    },
+    {
+      "question": "Why should BM25 be combined with dense semantic retrieval?",
+      "source": "sample_book.md",
+      "relevant_text_contains": ["BM25 is a lexical ranking method"],
+      "expected_answer_terms": ["lexical", "exact", "semantic"]
+    },
+    {
+      "question": "How does reciprocal rank fusion combine dense and lexical results?",
+      "source": "sample_book.md",
+      "relevant_text_contains": ["Reciprocal Rank Fusion combines the two ranked lists"],
+      "expected_answer_terms": ["rank", "reciprocal", "scores"]
+    },
+    {
+      "question": "Why is a cross-encoder used after first-stage retrieval?",
+      "source": "sample_book.md",
+      "relevant_text_contains": ["A cross-encoder instead reads the question and candidate passage together"],
+      "expected_answer_terms": ["question", "passage", "candidates"]
+    },
+    {
+      "question": "What makes an answer grounded and auditable?",
+      "source": "sample_book.md",
+      "relevant_text_contains": ["A grounded answer should use only the retrieved excerpts"],
+      "expected_answer_terms": ["retrieved", "citations", "abstain"]
+    },
+    {
+      "question": "Define precision at k and recall at k.",
+      "source": "sample_book.md",
+      "relevant_text_contains": ["Precision at k is the fraction of the top k retrieved chunks"],
+      "expected_answer_terms": ["fraction", "relevant", "top k"]
+    },
+    {
+      "question": "What is the exact ISBN of this sample book?",
+      "source": "sample_book.md",
+      "relevant_text_contains": [],
+      "expected_abstention": true
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+.DS_Store
+storage/qdrant/
+storage/huggingface/
+storage/chunks.jsonl
+storage/evaluation/
+data/uploads/*
+!data/uploads/.gitkeep

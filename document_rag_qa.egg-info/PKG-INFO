@@ -1,0 +1,382 @@
+Metadata-Version: 2.4
+Name: document-rag-qa
+Version: 1.0.0
+Summary: Local, citation-grounded document Q&A with LangChain, Qdrant, BM25, and transformer reranking.
+Author: Prathamesh Chintawar
+License: MIT
+Requires-Python: <3.14,>=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: langchain<2,>=1.0
+Requires-Dist: langchain-community<0.5,>=0.4
+Requires-Dist: langchain-core<2,>=1.0
+Requires-Dist: langchain-text-splitters<2,>=1.0
+Requires-Dist: langchain-qdrant<2,>=1.1
+Requires-Dist: langchain-huggingface<2,>=1.2
+Requires-Dist: qdrant-client<2,>=1.16
+Requires-Dist: sentence-transformers<6,>=5.2
+Requires-Dist: transformers<6,>=5.0
+Requires-Dist: torch<3,>=2.6
+Requires-Dist: rank_bm25<1,>=0.2.2
+Requires-Dist: pymupdf<2,>=1.26
+Requires-Dist: python-docx<2,>=1.2
+Requires-Dist: beautifulsoup4<5,>=4.13
+Requires-Dist: streamlit<2,>=1.50
+Requires-Dist: requests<3,>=2.32
+Requires-Dist: python-dotenv<2,>=1.1
+Requires-Dist: numpy<3,>=2.0
+Provides-Extra: dev
+Requires-Dist: pytest<10,>=8; extra == "dev"
+Requires-Dist: ruff<1,>=0.14; extra == "dev"
+Dynamic: license-file
+
+# RAG-Based Document Q&A System
+
+**Python · LangChain · Qdrant · Hugging Face Transformers · BM25 · Cross-Encoder Reranking**
+
+A local-first document Q&A and book-summary project. Upload a PDF, DOCX, Markdown, TXT, or HTML file, index it, and ask questions whose answers must be supported by the selected document. The repository deliberately separates ingestion, retrieval, generation, and evaluation so each RAG stage can be inspected and tested independently.
+
+## What is implemented
+
+- **Loading and parsing:** PyMuPDF extracts PDF text page by page; python-docx extracts DOCX paragraphs/tables and heading sections; Markdown headings are preserved; TXT and HTML are supported. Source, page, section, and file metadata travel with every passage.
+- **Chunking:** LangChain `RecursiveCharacterTextSplitter`, with paragraph → line → sentence → smaller-boundary preferences. The parser keeps PDF pages and Markdown/DOCX sections separate before chunking.
+- **Embedding generation:** A local Hugging Face Sentence Transformer (`sentence-transformers/all-MiniLM-L6-v2`) creates normalized dense vectors. It is a compact CPU-friendly starting model.
+- **Storage and indexing:** Qdrant stores chunk vectors and metadata. It runs in persistent local mode by default; a Qdrant server or cloud endpoint can be configured without changing retrieval code. A small JSONL catalog keeps text available for BM25 and reproducible evaluation.
+- **Hybrid retrieval:** Qdrant cosine similarity search and LangChain `BM25Retriever` run independently. Reciprocal Rank Fusion (RRF) combines their rankings without adding incompatible raw score scales.
+- **Reranking:** A Hugging Face cross-encoder (`cross-encoder/ms-marco-MiniLM-L-6-v2`) re-scores the first-stage candidate set using the question and passage together.
+- **Grounded generation:** The generator receives only the selected excerpts, each marked `[S1]`, `[S2]`, etc. It is instructed to abstain when the document does not support an answer. Citation markers are checked against the context supplied to the model.
+- **Book summarization:** A map-reduce workflow summarizes bounded groups of chunks and combines their notes, rather than sending an entire book in one prompt.
+- **Evaluation:** A golden-question runner reports Precision@K, Recall@K, MRR, nDCG@K, expected-answer-term coverage, citation coverage/validity, and abstention accuracy. It writes a JSON report.
+- **Interfaces:** A Streamlit upload/chat interface and a CLI for ingestion, retrieval inspection, Q&A, summarization, removal, and evaluation.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    A[PDF / DOCX / MD / TXT / HTML] --> B[Parser]
+    B --> C[LangChain Recursive Character Splitter]
+    C --> D[Hugging Face Embeddings]
+    D --> E[(Qdrant: vectors + metadata)]
+    C --> F[(JSONL chunk catalog)]
+    Q[User question] --> G[Query embedding]
+    G --> H[Qdrant cosine search]
+    Q --> I[BM25Retriever]
+    F --> I
+    H --> J[RRF rank fusion]
+    I --> J
+    J --> K[Cross-encoder reranker]
+    K --> L[Top evidence chunks + citation IDs]
+    L --> M[Ollama / optional Transformers LLM]
+    M --> N[Grounded answer + citations]
+    N --> O[Evaluation and human review]
+```
+
+### Ingestion workflow
+
+1. Identify file type and parse text while preserving available page/heading context.
+2. Attach metadata (`source_id`, `source_name`, `page_number`, `section_title`, etc.).
+3. Split each page/section with recursive separators and a configurable overlap.
+4. Generate a stable chunk ID and embedding for each chunk.
+5. Replace existing chunks for that file path, then store vectors and payloads in Qdrant.
+6. Write chunk text/metadata to the JSONL catalog so BM25 can be rebuilt when the app starts.
+
+### Retrieval workflow
+
+1. Embed the question and retrieve the top dense candidates from Qdrant using cosine distance.
+2. Run BM25 against the same eligible chunk corpus for exact lexical matching.
+3. Merge the two ranked lists with **RRF**: `score(d) = Σ 1 / (k + rank_i(d))`.
+4. Rerank the merged candidate pool with the cross-encoder.
+5. Keep the top K evidence chunks and retain their source metadata and retrieval diagnostics.
+
+### Generation workflow
+
+1. Assign local citation IDs (`[S1]`, `[S2]`) to the retrieved excerpts.
+2. Build a bounded context to avoid passing an entire book to the model.
+3. Instruct the model to answer only from these excerpts, cite factual claims, and abstain when evidence is absent.
+4. Validate that cited source IDs belong to the supplied evidence set.
+5. Show the source filename and page or section with each citation.
+
+> A citation marker proves which excerpt was supplied, not that the claim is necessarily entailed by it. The project includes automatic grounding signals, but important answers still need human review.
+
+## Chunking choice: why this default?
+
+There is no universally best chunk size for every PDF or book. For narrative and explanatory prose, recursive character splitting is a strong, understandable baseline because it prefers natural paragraph and sentence boundaries rather than blindly cutting at a fixed character count. This project uses:
+
+| Setting | Default | Reason |
+|---|---:|---|
+| Chunk size | 900 characters | Usually keeps a focused passage within the compact embedding/reranker context limits |
+| Overlap | 150 characters | Preserves a small amount of context around a split boundary |
+| Parent boundary | PDF page / Markdown heading / DOCX heading section | Prevents chunks from drifting across unrelated sections |
+| Final context | Top 5 reranked chunks | Keeps the generation prompt focused and auditable |
+
+Tune these values with your own evaluation dataset. Smaller chunks can improve pinpoint retrieval but lose context; larger chunks retain context but can dilute relevance and consume more prompt space. For tables, legal contracts, scientific papers, or highly structured manuals, consider specialized structure-aware parsing and table extraction rather than relying only on generic character splitting.
+
+## Models and resource profile
+
+Default models:
+
+| Stage | Model | Notes |
+|---|---|---|
+| Embedding | `sentence-transformers/all-MiniLM-L6-v2` | 384 dimensions; relatively small and CPU-friendly |
+| Reranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Reranks only the top candidate pool; CPU inference is slower than embedding search |
+| Generation | Ollama `gemma3:4b` | Uses a local Ollama service; no API key required |
+| Optional generation | `Qwen/Qwen2.5-1.5B-Instruct` through Transformers | Fully local Hugging Face causal-LM option; may require several GB of RAM |
+
+The embedding and reranker models are downloaded from Hugging Face on first use. Set `HF_HOME` to choose the model cache location. The default setup is intentionally CPU-first and avoids requiring CUDA. Large books and large libraries will take longer to index; local Qdrant mode is intended for development/small-to-medium local collections. Use a Qdrant server or Qdrant Cloud when you need multiple processes or larger-scale deployments.
+
+## Setup on Ubuntu 24.04
+
+Python 3.11 or 3.12 is recommended. Ubuntu 24.04 usually provides Python 3.12 by default.
+
+```bash
+# 1. Extract the ZIP and enter the project
+cd document-rag-qa
+
+# 2. Install venv support if needed
+sudo apt update
+sudo apt install -y python3-venv python3-pip build-essential
+
+# 3. Create and activate a clean environment
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip wheel
+
+# 4. Install project and development dependencies
+python -m pip install -e ".[dev]"
+
+# 5. Create your local configuration
+cp .env.example .env
+
+# 6. Run unit tests (does not download ML models)
+pytest
+```
+
+If your machine has multiple Python versions, explicitly use `python3.12 -m venv .venv`.
+
+## Start local generation with Ollama
+
+The default provider is Ollama. On a machine where Ollama is already installed:
+
+```bash
+ollama list
+# Download only if the configured model is not present:
+ollama pull gemma3:4b
+```
+
+Ensure the Ollama service is running and responds at `http://localhost:11434`. In another terminal you can start it with:
+
+```bash
+ollama serve
+```
+
+The app sends local requests to `/api/chat`. No cloud LLM key is needed. Change `OLLAMA_MODEL` in `.env` to use another local Ollama model.
+
+### Optional: use a Hugging Face Transformers generator instead
+
+Edit `.env`:
+
+```dotenv
+LLM_PROVIDER=transformers
+TRANSFORMERS_GENERATION_MODEL=Qwen/Qwen2.5-1.5B-Instruct
+```
+
+The model will download on first generation. This is optional; the embedding and reranking stages already use Hugging Face Transformer-based models.
+
+## Run the demo end to end
+
+First index the included sample book:
+
+```bash
+python -m rag_app.cli ingest examples/sample_book.md
+python -m rag_app.cli list
+```
+
+Inspect retrieval without calling an LLM (useful while debugging retrieval):
+
+```bash
+python -m rag_app.cli retrieve \
+  "How does BM25 complement semantic retrieval?" \
+  --source sample_book.md
+```
+
+Ask a question scoped to that document:
+
+```bash
+python -m rag_app.cli ask \
+  "How does BM25 complement semantic retrieval?" \
+  --source sample_book.md
+```
+
+Test abstention on something not present in the sample book:
+
+```bash
+python -m rag_app.cli ask \
+  "What is the exact ISBN of this sample book?" \
+  --source sample_book.md
+```
+
+Generate a document-level summary:
+
+```bash
+python -m rag_app.cli summarize --source sample_book.md
+```
+
+Or run the included demo script:
+
+```bash
+bash scripts/run_demo.sh
+```
+
+## Start the upload and chat UI
+
+From the repository root, with the virtual environment active:
+
+```bash
+streamlit run app.py
+```
+
+Open the local address printed by Streamlit (normally `http://localhost:8501`). Upload one or more documents in the sidebar, click **Ingest uploaded files**, select a specific file under **Search in**, and ask a question. Choosing a single source is the simplest way to keep book Q&A isolated to that book. Use **All indexed documents** only when cross-document retrieval is intended.
+
+Supported upload types: PDF, DOCX, TXT, Markdown, HTML.
+
+## Evaluation: test retrieval and generation
+
+The included evaluation dataset is `evals/golden_qa.json`. It contains questions, the target file (`sample_book.md`), manually selected relevant text fragments, expected answer terms, and one out-of-scope question.
+
+```bash
+# Retrieval-only metrics (does not call the generation model)
+python -m rag_app.cli evaluate \
+  --dataset evals/golden_qa.json \
+  --k 5 \
+  --retrieval-only
+
+# Full retrieval + generation evaluation (requires the configured LLM)
+python -m rag_app.cli evaluate \
+  --dataset evals/golden_qa.json \
+  --k 5
+```
+
+The report is written to `storage/evaluation/latest_report.json` by default. It contains aggregate metrics and per-question ranked chunks, similarity/reranker diagnostics, generated answers, citations, and expected-term coverage.
+
+### What the metrics mean
+
+- **Precision@K:** relevant retrieved chunks in the top K divided by K.
+- **Recall@K:** relevant retrieved chunks in the top K divided by the total manually labelled relevant chunks for that question.
+- **MRR:** reciprocal rank of the first relevant chunk; rewards relevant evidence near the top.
+- **nDCG@K:** rank-sensitive relevance score; higher-ranked relevant chunks receive more weight.
+- **Expected-answer-term coverage:** fraction of manually specified terms found in the generated answer. This is a simple lexical proxy, not semantic correctness.
+- **Citation coverage / valid citation rate:** whether the generated answer contains source markers and whether those markers point to supplied sources.
+- **Abstention accuracy:** whether the application abstained for the labelled out-of-scope question and answered for labelled in-scope questions.
+
+The sample evaluation set is intentionally small and educational. Create a larger, representative dataset from your own books/documents and have a human label relevant chunks. Avoid using the same handful of example questions as the only evidence that a RAG pipeline works.
+
+## Useful commands
+
+```bash
+python -m rag_app.cli --help
+python -m rag_app.cli ingest /path/to/book.pdf /path/to/notes.docx
+python -m rag_app.cli list
+python -m rag_app.cli retrieve "question" --source book.pdf
+python -m rag_app.cli ask "question" --source book.pdf
+python -m rag_app.cli summarize --source book.pdf
+python -m rag_app.cli remove book.pdf
+python -m rag_app.cli warmup
+pytest
+```
+
+Re-ingesting the same path replaces its previous chunks (it does not intentionally append duplicates). Qdrant vectors and the BM25 text catalog persist under `storage/`. Do not delete `storage/qdrant/` or `storage/chunks.jsonl` unless you intend to clear the local index. Uploaded files are saved under `data/uploads/`.
+
+## Configuration
+
+Copy `.env.example` to `.env`; all settings can be changed without editing Python modules.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Dense embedding model |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP` | `900` / `150` | Recursive splitter settings, in characters |
+| `DENSE_TOP_K` / `BM25_TOP_K` | `20` / `20` | First-stage retrieval candidates |
+| `RERANK_CANDIDATES` | `20` | Maximum fused candidates passed to cross-encoder |
+| `FINAL_TOP_K` | `5` | Evidence chunks passed to generation |
+| `RERANKER_ENABLED` | `true` | Enable/disable cross-encoder reranking |
+| `MIN_RERANK_SCORE` | `0.10` | Low-score abstention cutoff; calibrate on your data |
+| `LLM_PROVIDER` | `ollama` | `ollama` or `transformers` |
+| `QDRANT_URL` | empty | Set to use a Qdrant server instead of embedded local mode |
+| `QDRANT_API_KEY` | empty | Optional API key for remote Qdrant |
+
+### Optional Qdrant server
+
+The default local embedded mode needs no Docker. To run a Qdrant server instead, start the official container:
+
+```bash
+docker run -d --name document-rag-qdrant \
+  -p 6333:6333 -p 6334:6334 \
+  -v "$(pwd)/storage/qdrant-server:/qdrant/storage" \
+  qdrant/qdrant
+```
+
+Then set this in `.env` and restart the app:
+
+```dotenv
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=
+```
+
+Use the server option for workflows where multiple processes need to access the same database. Do not point both local embedded and remote mode at the same underlying storage folder.
+
+## Project layout
+
+```text
+document-rag-qa/
+├── app.py                       # Streamlit upload/chat/summarization UI
+├── rag_app/
+│   ├── config.py                 # Environment-backed settings
+│   ├── loaders.py                # PDF/DOCX/Markdown/TXT/HTML parsing
+│   ├── chunking.py               # Recursive character chunking + IDs
+│   ├── embeddings.py             # Hugging Face dense embeddings
+│   ├── vectorstore.py            # Qdrant storage and cosine search
+│   ├── catalog.py                # Durable text catalog for BM25/evaluation
+│   ├── retrieval.py              # BM25 + dense RRF + cross-encoder reranking
+│   ├── generation.py             # Ollama / optional Transformers generators
+│   ├── answering.py              # Citation-grounded QA + map-reduce summaries
+│   ├── service.py                # Ingestion/retrieval/generation orchestration
+│   ├── evaluation.py             # Retrieval and generation evaluation metrics
+│   └── cli.py                    # Command-line interface
+├── examples/sample_book.md       # Small sample source document
+├── evals/golden_qa.json          # Manually labelled evaluation examples
+├── tests/test_core.py            # Unit tests for core logic
+├── scripts/run_demo.sh           # End-to-end command sequence
+├── data/uploads/                 # UI-uploaded source files (gitignored)
+└── storage/                      # Qdrant, text catalog, model cache, reports
+```
+
+## Suggested learning and experiment sequence
+
+Use this order to understand the project rather than treating it as one opaque RAG app:
+
+1. Read `rag_app/loaders.py`; inspect the `Document` objects and their metadata. Compare a PDF page with a Markdown heading section.
+2. Read `rag_app/chunking.py`; change `CHUNK_SIZE` and `CHUNK_OVERLAP` in `.env`, re-ingest the sample file, and inspect how the number and boundaries of chunks change.
+3. Read `rag_app/embeddings.py` and `rag_app/vectorstore.py`; run `retrieve` and inspect cosine similarity values returned by Qdrant.
+4. Read `rag_app/retrieval.py`; compare the BM25 rank, dense cosine score, RRF score, and cross-encoder score for the same candidate. Set `RERANKER_ENABLED=false` and rerun evaluation to see the reranker's effect.
+5. To isolate dense retrieval, set `BM25_TOP_K=0`; to isolate lexical retrieval, set `DENSE_TOP_K=0`. Re-ingest is not required when only retrieval settings change.
+6. Read `rag_app/answering.py`; compare the prompt's evidence-only rule with the source markers returned by the model. Ask one in-scope and one out-of-scope question.
+7. Read `rag_app/evaluation.py`; add your own question and manually label relevant text in `evals/golden_qa.json`. Track metrics before and after changing chunking or retrieval settings.
+
+For fair comparisons, change one setting at a time, use the same evaluation questions, and keep a copy of each JSON report.
+
+## Known limitations and next improvements
+
+1. **Scanned PDFs:** OCR is not included. A scanned/image-only PDF produces a clear error; add OCR (for example, Tesseract or a document OCR service) as a distinct parser stage if needed.
+2. **Page numbering:** PDF citations include 1-based PDF page numbers. DOCX does not expose dependable rendered page numbers through `python-docx`, so DOCX citations use section titles instead.
+3. **Tables/layout:** Text extraction can flatten complex tables and multi-column layouts. Add table-aware parsing for scientific/financial documents.
+4. **Evaluation:** The included term/citation metrics are diagnostics, not a full semantic faithfulness judge. For serious evaluation, add human-reviewed relevance labels, answer correctness checks, and a calibrated LLM-as-judge protocol.
+5. **Threshold calibration:** Cross-encoder score thresholds vary by model and dataset. `MIN_RERANK_SCORE` is a starting point; tune it using labelled in-scope and out-of-scope questions rather than assuming one universal cutoff.
+6. **Local database concurrency:** Embedded Qdrant mode is convenient for a single local app/process. Use the server mode for multi-process access.
+
+## References
+
+- [Qdrant + LangChain integration](https://qdrant.tech/documentation/integrations/langchain/)
+- [LangChain QdrantVectorStore reference](https://reference.langchain.com/python/langchain-qdrant/qdrant/QdrantVectorStore)
+- [LangChain HuggingFaceEmbeddings reference](https://reference.langchain.com/python/langchain-huggingface/embeddings/huggingface/HuggingFaceEmbeddings)
+- [LangChain BM25Retriever reference](https://reference.langchain.com/python/langchain-community/retrievers/bm25/BM25Retriever)
+- [Sentence Transformers Cross-Encoder usage](https://www.sbert.net/docs/cross_encoder/usage/usage.html)
+- [Qdrant local mode](https://qdrant.tech/documentation/quick-start/)
